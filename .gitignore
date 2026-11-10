@@ -1,0 +1,9 @@
+__pycache__/
+.pytest_cache/
+.venv/
+.env
+data/raw/
+data/extracted/*.csv
+data/anonymized/*.csv
+*.pdf
+!docs/*.pdf

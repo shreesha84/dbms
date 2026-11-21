@@ -1,1 +1,99 @@
-{% extends 'base.html' %}{% block body %}<h1>Voter dashboard</h1><p>{{ voter.name }} ({{ voter.epic }}) — {{ voter.status }}</p><h2>Enumeration form</h2><form method="post" action="/voter/form" class="card card-body gap-2"><input class="form-control" name="name" placeholder="Name" required><input class="form-control" name="age" type="number" min="18" max="120" placeholder="Age" required><input class="form-control" name="house_no" placeholder="House number"><button class="btn btn-primary">Submit</button></form><h2 class="mt-4">Report migration</h2><form method="post" action="/voter/migration" class="card card-body gap-2"><input class="form-control" name="from_address" placeholder="Current address" required><input class="form-control" name="to_address" placeholder="New address" required><button class="btn btn-secondary">Report migration</button></form><form method="post" action="/logout" class="mt-3"><button class="btn btn-link">Sign out</button></form>{% endblock %}
+{% extends 'base.html' %}
+{% block body %}
+<h1 class="h3 mb-3">Voter Dashboard</h1>
+
+<div class="card mb-4 shadow-sm">
+  <div class="card-body">
+    <h2 class="h5">Voter Record (D1)</h2>
+    <p class="mb-1">
+      <strong>{{ voter.name }}</strong> (EPIC: <code>{{ voter.epic }}</code>) —
+      <span class="badge bg-secondary">{{ voter.status }}</span>
+    </p>
+    <p class="text-muted small mb-0">
+      Part {{ voter.part_no }} ({{ voter.booth_name }}), Section {{ voter.section_no }} ({{ voter.section_name }}) |
+      House: {{ voter.house_no or 'N/A' }} | Age: {{ voter.age }} | Gender: {{ voter.gender }} |
+      Assigned BLO: {{ voter.blo_name or 'Not yet assigned' }}
+    </p>
+  </div>
+</div>
+
+<div class="row g-4 mb-4">
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h5">1.0 Submit Enumeration Form</h2>
+        <p class="text-muted small">Validated against D1 (Process 2.1) and forwarded to your BLO (Process 2.2).</p>
+        <form method="post" action="/voter/form" class="d-grid gap-2">
+          <label class="form-label mb-0">Full Name
+            <input class="form-control" name="name" value="{{ voter.name }}" placeholder="Full name">
+          </label>
+          <label class="form-label mb-0">Age (18–120)
+            <input class="form-control" name="age" value="{{ voter.age }}" placeholder="Age">
+          </label>
+          <label class="form-label mb-0">House Number
+            <input class="form-control" name="house_no" value="{{ voter.house_no }}" placeholder="House number">
+          </label>
+          <button class="btn btn-primary mt-2">Submit Enumeration Form</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6">
+    <div class="card shadow-sm h-100">
+      <div class="card-body">
+        <h2 class="h5">4.0 Report Migration</h2>
+        <p class="text-muted small">Recorded in D4 and applied when the SIR Administrator approves a roll update (Process 5.0).</p>
+        <form method="post" action="/voter/migration" class="d-grid gap-2">
+          <label class="form-label mb-0">Current Address
+            <input class="form-control" name="from_address" value="{{ voter.house_no }}" placeholder="Current address" required>
+          </label>
+          <label class="form-label mb-0">New Address
+            <input class="form-control" name="to_address" placeholder="New address" required>
+          </label>
+          <button class="btn btn-secondary mt-2">Report Migration</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-6">
+    <h2 class="h5">Enumeration Form Acknowledgements (D2)</h2>
+    <table class="table table-sm table-bordered bg-white">
+      <thead><tr><th>Form #</th><th>Status</th><th>Details / Feedback</th></tr></thead>
+      <tbody>
+        {% for f in forms %}
+          <tr>
+            <td>#{{ f.form_id }}</td>
+            <td>{{ f.status }}</td>
+            <td>{{ f.error_reason or ('Name: ' ~ (f.payload.name or '') ~ ', Age: ' ~ (f.payload.age or '')) }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="3" class="text-muted">No enumeration forms submitted yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col-md-6">
+    <h2 class="h5">Migration Records (D4)</h2>
+    <table class="table table-sm table-bordered bg-white">
+      <thead><tr><th>ID</th><th>From</th><th>To</th><th>Applied</th></tr></thead>
+      <tbody>
+        {% for m in migrations %}
+          <tr>
+            <td>#{{ m.migration_id }}</td>
+            <td>{{ m.from_address }}</td>
+            <td>{{ m.to_address }}</td>
+            <td>{{ m.applied_at or 'Pending roll update' }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="text-muted">No migration records submitted yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,1 +1,10 @@
-{% extends 'base.html' %}{% block body %}<h1>{{ title }}</h1><p>{{ message }}</p><a class="btn btn-primary" href="/dashboard">Back to dashboard</a>{% endblock %}
+{% extends 'base.html' %}
+{% block body %}
+<div class="card shadow-sm" style="max-width: 42rem;">
+  <div class="card-body">
+    <h1 class="h4 mb-3">{{ title }}</h1>
+    <div class="alert alert-{{ category or 'info' }}">{{ message }}</div>
+    <a class="btn btn-primary" href="{{ back_url or '/dashboard' }}">{{ back_label or 'Back to dashboard' }}</a>
+  </div>
+</div>
+{% endblock %}

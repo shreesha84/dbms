@@ -9,6 +9,7 @@ import csv
 import os
 from contextlib import contextmanager
 from io import StringIO
+from pathlib import Path
 
 import psycopg
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -27,7 +28,8 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("SESSION_SECRET", "dev-change-me-for-local-coursework"),
 )
-templates = Jinja2Templates(directory="templates")
+BASE_DIR = Path(__file__).resolve().parent
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
 @contextmanager
@@ -288,6 +290,9 @@ def dashboard(request: Request):
             },
         )
 
+    if user["role"] != "ADMIN":
+        raise HTTPException(status_code=403, detail="Unknown user role")
+
     with db() as conn:
         sums = conn.execute("SELECT * FROM part_summary ORDER BY part_no").fetchall()
         statuses = conn.execute("SELECT * FROM status_summary ORDER BY status").fetchall()
@@ -324,7 +329,7 @@ def dashboard(request: Request):
     )
 
 
-# Process 1.0: Receive Enumeration Form
+# Process 1.0 (Receive) -> Process 2.1 (Validate) -> Process 2.2 (Send Verification Request)
 @app.post("/voter/form")
 def submit_form(
     request: Request,
@@ -336,57 +341,80 @@ def submit_form(
     payload = {"name": name.strip(), "age": age.strip(), "house_no": house_no.strip()}
     try:
         with db() as conn:
-            row = conn.execute(
+            form_id = conn.execute(
                 "SELECT fn_submit_form(%s, %s::jsonb) AS form_id",
                 (user["voter_epic"], Jsonb(payload)),
-            ).fetchone()
+            ).fetchone()["form_id"]
+            status = conn.execute(
+                "SELECT fn_validate_form(%s) AS status",
+                (form_id,),
+            ).fetchone()["status"]
+
+            if status == "VALID":
+                try:
+                    with conn.transaction():
+                        conn.execute(
+                            "SELECT fn_send_verification_request(%s) AS request_id",
+                            (form_id,),
+                        )
+                except psycopg.Error as exc:
+                    set_flash(
+                        request,
+                        "warning",
+                        f"Form #{form_id} is VALID, but could not be queued for BLO verification: "
+                        f"{_pg_message(exc)}",
+                    )
     except psycopg.Error as exc:
         set_flash(request, "danger", f"Could not submit enumeration form: {_pg_message(exc)}")
         return RedirectResponse("/dashboard", status_code=303)
 
-    return RedirectResponse(f"/voter/form/{row['form_id']}", status_code=303)
+    return RedirectResponse(f"/voter/form/{form_id}", status_code=303)
 
 
-# Process 2.1 (Validate) + Process 2.2 (Send Field Verification Request)
+# Read-only Acknowledgement & Validation Outcome View for Process 1.0 / 2.1 / 2.2
 @app.get("/voter/form/{form_id}", response_class=HTMLResponse)
 def validate_view(request: Request, form_id: int):
     user = require(request, "VOTER")
+    flash = pop_flash(request)
     with db() as conn:
         form_row = conn.execute(
-            "SELECT form_id, epic FROM enumeration_form WHERE form_id = %s",
+            """
+            SELECT ef.form_id, ef.epic, ef.status, ef.error_reason,
+                   vr.request_id, vr.status AS verification_status
+            FROM enumeration_form ef
+            LEFT JOIN verification_request vr ON vr.form_id = ef.form_id
+            WHERE ef.form_id = %s
+            """,
             (form_id,),
         ).fetchone()
         if not form_row or form_row["epic"] != user["voter_epic"]:
             raise HTTPException(status_code=404, detail="Enumeration form not found")
 
-        status = conn.execute(
-            "SELECT fn_validate_form(%s) AS status", (form_id,)
-        ).fetchone()["status"]
-        reason = conn.execute(
-            "SELECT error_reason FROM enumeration_form WHERE form_id = %s", (form_id,)
-        ).fetchone()["error_reason"]
-
-        if status == "VALID":
-            try:
-                req_id = conn.execute(
-                    "SELECT fn_send_verification_request(%s) AS request_id", (form_id,)
-                ).fetchone()["request_id"]
-                msg = (
-                    f"Acknowledgement: Form #{form_id} passed validation and was sent to your "
-                    f"assigned BLO (Verification Request #{req_id})."
-                )
-                category = "success"
-            except psycopg.Error as exc:
-                msg = (
-                    f"Form #{form_id} is VALID, but could not be queued for BLO verification: "
-                    f"{_pg_message(exc)}"
-                )
-                category = "warning"
+    status = form_row["status"]
+    if status == "VALID":
+        if form_row["request_id"]:
+            msg = (
+                f"Acknowledgement: Form #{form_id} passed validation and was sent to your "
+                f"assigned BLO (Verification Request #{form_row['request_id']}, "
+                f"status: {form_row['verification_status']})."
+            )
+            category = "success"
         else:
             msg = (
-                f"Form #{form_id} is INVALID: {reason or 'Please correct the details and resubmit.'}"
+                flash["text"]
+                if flash
+                else f"Form #{form_id} is VALID, but no BLO verification request has been queued yet."
             )
-            category = "danger"
+            category = "warning"
+    elif status == "INVALID":
+        msg = (
+            f"Form #{form_id} is INVALID: "
+            f"{form_row['error_reason'] or 'Please correct the details and resubmit.'}"
+        )
+        category = "danger"
+    else:
+        msg = f"Form #{form_id} has been received (status: {status})."
+        category = "info"
 
     return templates.TemplateResponse(
         request,

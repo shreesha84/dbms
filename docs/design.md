@@ -33,8 +33,8 @@ The project is scoped for a third-year engineering DBMS course: clear PostgreSQL
 | DFD Process | Key Data Flows | Database Implementation | Web Endpoint |
 |---|---|---|---|
 | **1.0 Receive Enumeration Form** | Voter → *Enumeration Form, Personal Details* → 1.0 → *Form Data* (D2), *Acknowledgement* (Voter), *Submitted Form* (2.0) | `fn_submit_form(p_epic, p_payload)` inserts into `enumeration_form` and returns `form_id` | `POST /voter/form` |
-| **2.1 Validate Enumeration Form** | *Submitted Form* (1.0) + *Existing Records* (D1) → 2.1 → *Valid Form Details* (2.2) or *Invalid Form* (loops back to 1.0) | `fn_validate_form(p_form)` checks voter existence, post-migration lock, non-empty name, and age `18..120`; sets `status` (`VALID`/`INVALID`) and `error_reason` | `GET /voter/form/{form_id}` |
-| **2.2 Send Field Verification Request** | *Valid Form Details* (2.1) → 2.2 → *Verification Request* (BLO) ← *Verification Results, Field Reports* (BLO) → *Verification Outcome* (2.3) | `fn_send_verification_request(p_form)` creates `verification_request` for the voter's `assigned_blo_id` | Automatic on valid form in `GET /voter/form/{form_id}`; displayed on BLO `/dashboard` |
+| **2.1 Validate Enumeration Form** | *Submitted Form* (1.0) + *Existing Records* (D1) → 2.1 → *Valid Form Details* (2.2) or *Invalid Form* (loops back to 1.0) | `fn_validate_form(p_form)` checks voter existence, post-migration lock, non-empty name, and age `18..120` (idempotent once validated); sets `status` (`VALID`/`INVALID`) and `error_reason` | `POST /voter/form` (result shown on read-only `GET /voter/form/{form_id}`) |
+| **2.2 Send Field Verification Request** | *Valid Form Details* (2.1) → 2.2 → *Verification Request* (BLO) ← *Verification Results, Field Reports* (BLO) → *Verification Outcome* (2.3) | `fn_send_verification_request(p_form)` creates `verification_request` for the voter's `assigned_blo_id` | Automatic on valid form in `POST /voter/form`; displayed on BLO `/dashboard` |
 | **2.3 Update Verification Status** | *Verification Outcome* (2.2) → 2.3 → *Verification Record / Verified Details* (D1) & *Verified Voter Data* (3.0) | `fn_record_verification(p_request, p_ok, p_report)` closes the request, updates `voter` details/status (`VERIFIED` or `REJECTED`), and triggers `audit_log` | `POST /blo/verification/{request_id}` |
 | **3.0 Manage Booth Allocation** | *Verified Voter Data* (2.0) + *Booth Info* (D3) → 3.0 → *Booth Assignment* (D3) & *Assigned Voter List, Booth Details* (BLO) | `fn_assign_booth_and_blo(p_part, p_blo)` updates `voter.assigned_blo_id`; `v_blo_assigned_voters` exposes assigned voters + booth/section details | `POST /admin/assign`; BLO `/dashboard` |
 | **4.0 Record Migration** | Voter → *Migration Info* → 4.0 → *Migration Record* (D4) & *Migration Update* (5.0) | `fn_record_migration(p_epic, p_from, p_to)` inserts into `migration_record` (max one open migration per voter via partial unique index) | `POST /voter/migration` |
@@ -137,6 +137,7 @@ erDiagram
     SECTION ||--o{ VOTER : contains
     BLO ||--o{ VOTER : assigned_to
     VOTER ||--o{ ENUMERATION_FORM : submits
+    VOTER ||--o{ VERIFICATION_REQUEST : subject_of
     ENUMERATION_FORM ||--o| VERIFICATION_REQUEST : generates
     BLO ||--o{ VERIFICATION_REQUEST : verifies
     VOTER ||--o{ MIGRATION_RECORD : reports
@@ -164,7 +165,7 @@ erDiagram
 ### Triggers
 - `voter_touch` (`BEFORE UPDATE ON voter`): automatically refreshes `voter.updated_at = now()`.
 - `voter_status_audit` (`AFTER UPDATE ON voter`): records every `voter.status` transition in `audit_log`.
-- `voter_migration_guard` (`BEFORE UPDATE ON voter`): blocks edits to core demographic fields (`name`, `relation_name`, `house_no`, `age`, `gender`) once a voter has an applied migration.
+- `voter_migration_guard` (`BEFORE UPDATE ON voter`): blocks edits to core roll/demographic fields (`part_no`, `section_no`, `serial_no`, `name`, `relation_type`, `relation_name`, `house_no`, `age`, `gender`) and `status` once a voter has an applied migration.
 
 ### Database Roles & Coursework Limits
 - `db/schema.sql` defines three `NOLOGIN` roles (`voter_role`, `blo_role`, `admin_role`) with least-privilege table, sequence, and function grants after revoking `PUBLIC` access.

@@ -32,7 +32,7 @@ python -m pip install -r requirements.txt
 Create the `sir` role and database using `psql` as a PostgreSQL superuser (e.g. `postgres`):
 
 ```sql
-CREATE USER sir WITH PASSWORD 'sir';
+CREATE USER sir WITH PASSWORD 'sir' CREATEROLE;
 CREATE DATABASE sir OWNER sir;
 ```
 

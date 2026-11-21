@@ -4,22 +4,32 @@
 
 DO $$
 DECLARE
-    v_epic    text;
-    v_form    bigint;
-    v_req     bigint;
-    v_bad     bigint;
-    v_applied integer;
+    v_epic       text;
+    v_form       bigint;
+    v_req        bigint;
+    v_bad        bigint;
+    v_bad_status form_status;
+    v_applied    integer;
 BEGIN
-    -- Pick a seeded voter who already has an assigned BLO
+    -- Pick a seeded, non-migrated voter who already has an assigned BLO
     SELECT epic INTO STRICT v_epic
     FROM voter
     WHERE assigned_blo_id IS NOT NULL
+      AND status <> 'MIGRATED'
     ORDER BY serial_no
     LIMIT 1;
 
     -- Process 5.0 prerequisite: SIR Administrator approves an active revision window
     INSERT INTO sir_config(start_date, end_date, approved, approved_by, approved_at)
     VALUES (current_date - 1, current_date + 1, true, 'admin', now());
+
+    -- Invalid submission demonstration (Process 2.1 -> loops back to 1.0)
+    v_bad := fn_submit_form(v_epic, '{"name":"","age":15}'::jsonb);
+    v_bad_status := fn_validate_form(v_bad);
+    RAISE NOTICE '[2.1 Invalid] form_id=%, status=%, reason=%',
+        v_bad,
+        v_bad_status,
+        (SELECT error_reason FROM enumeration_form WHERE form_id = v_bad);
 
     -- Process 1.0: Voter submits enumeration form -> receives acknowledgement form_id
     v_form := fn_submit_form(v_epic, '{"name":"Demonstration Voter","age":35,"house_no":"D-10"}'::jsonb);
@@ -44,13 +54,6 @@ BEGIN
     v_applied := fn_apply_roll_update();
     RAISE NOTICE '[5.0] Roll update applied to % voter(s); new status=%',
         v_applied, (SELECT status FROM voter WHERE epic = v_epic);
-
-    -- Invalid submission demonstration (Process 2.1 -> loops back to 1.0)
-    v_bad := fn_submit_form(v_epic, '{"name":"","age":15}'::jsonb);
-    RAISE NOTICE '[2.1 Invalid] form_id=%, status=%, reason=%',
-        v_bad,
-        fn_validate_form(v_bad),
-        (SELECT error_reason FROM enumeration_form WHERE form_id = v_bad);
 END $$;
 
 -- Process 6.0: Generate SIR Reports & Audit Trail

@@ -64,15 +64,7 @@ def load(csv_path: Path, dsn: str) -> int:
                         relation_type, relation_name, house_no, age, gender
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (epic) DO UPDATE SET
-                        section_no    = EXCLUDED.section_no,
-                        serial_no     = EXCLUDED.serial_no,
-                        name          = EXCLUDED.name,
-                        relation_type = EXCLUDED.relation_type,
-                        relation_name = EXCLUDED.relation_name,
-                        house_no      = EXCLUDED.house_no,
-                        age           = EXCLUDED.age,
-                        gender        = EXCLUDED.gender
+                    ON CONFLICT (epic) DO NOTHING
                     """,
                     (
                         row["epic"].strip().upper(),
@@ -102,7 +94,7 @@ def main() -> None:
     args = parser.parse_args()
 
     count = load(args.csv, args.dsn)
-    print(f"Loaded {count} voter rows into PostgreSQL (idempotent upsert).")
+    print(f"Processed {count} voter rows into PostgreSQL (existing voters preserved).")
 
 
 if __name__ == "__main__":

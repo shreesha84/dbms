@@ -181,8 +181,15 @@ BEGIN
         SELECT 1
         FROM migration_record
         WHERE epic = OLD.epic AND applied_at IS NOT NULL
-    ) AND (NEW.name, NEW.relation_name, NEW.house_no, NEW.age, NEW.gender)
-          IS DISTINCT FROM (OLD.name, OLD.relation_name, OLD.house_no, OLD.age, OLD.gender)
+    ) AND (
+        NEW.part_no, NEW.section_no, NEW.serial_no, NEW.name,
+        NEW.relation_type, NEW.relation_name, NEW.house_no,
+        NEW.age, NEW.gender, NEW.status
+    ) IS DISTINCT FROM (
+        OLD.part_no, OLD.section_no, OLD.serial_no, OLD.name,
+        OLD.relation_type, OLD.relation_name, OLD.house_no,
+        OLD.age, OLD.gender, OLD.status
+    )
     THEN
         RAISE EXCEPTION 'Voter % has an applied migration and cannot be edited', OLD.epic;
     END IF;
@@ -226,6 +233,11 @@ BEGIN
     FROM enumeration_form
     WHERE form_id = p_form
     FOR UPDATE;
+
+    -- Keep previously validated forms immutable on repeated calls.
+    IF f.status <> 'SUBMITTED' THEN
+        RETURN f.status;
+    END IF;
 
     IF NOT EXISTS (SELECT 1 FROM voter WHERE epic = f.epic) THEN
         UPDATE enumeration_form
@@ -388,6 +400,12 @@ BEGIN
         RAISE EXCEPTION 'New address must differ from current address';
     END IF;
 
+    IF EXISTS (SELECT 1 FROM migration_record WHERE epic = p_epic AND applied_at IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM voter WHERE epic = p_epic AND status = 'MIGRATED')
+    THEN
+        RAISE EXCEPTION 'Voter % already has an applied migration', p_epic;
+    END IF;
+
     INSERT INTO migration_record(epic, from_address, to_address)
     VALUES (p_epic, v_from, v_to)
     RETURNING migration_id INTO v_id;
@@ -525,15 +543,17 @@ BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'admin_role') THEN
         CREATE ROLE admin_role NOLOGIN;
     END IF;
+    -- Allow the schema owner (e.g. sir with CREATEROLE) to SET LOCAL ROLE in tests.
+    EXECUTE format('GRANT voter_role, blo_role, admin_role TO %I', current_user);
 END $$;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
 
 -- Voter role: read own roll context and invoke voter submission/migration workflows
-GRANT SELECT ON voter, part, section, enumeration_form, migration_record TO voter_role;
-GRANT INSERT, UPDATE ON enumeration_form TO voter_role;
-GRANT INSERT ON migration_record, verification_request TO voter_role;
+GRANT SELECT ON voter, part, section, enumeration_form, migration_record, verification_request TO voter_role;
+GRANT INSERT, UPDATE ON enumeration_form, verification_request TO voter_role;
+GRANT INSERT ON migration_record TO voter_role;
 GRANT USAGE, SELECT ON SEQUENCE enumeration_form_form_id_seq,
                                 migration_record_migration_id_seq,
                                 verification_request_request_id_seq TO voter_role;
@@ -545,7 +565,7 @@ GRANT EXECUTE ON FUNCTION
 TO voter_role;
 
 -- BLO role: read assigned voters/requests and submit field verification outcomes
-GRANT SELECT ON v_blo_assigned_voters, verification_request, enumeration_form, part, section TO blo_role;
+GRANT SELECT ON v_blo_assigned_voters, verification_request, enumeration_form, voter, migration_record, part, section TO blo_role;
 GRANT UPDATE ON verification_request, voter TO blo_role;
 GRANT INSERT ON audit_log TO blo_role;
 GRANT USAGE, SELECT ON SEQUENCE audit_log_audit_id_seq TO blo_role;

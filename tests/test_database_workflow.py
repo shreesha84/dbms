@@ -59,6 +59,10 @@ def test_login_page_and_protected_routes():
         apply_roll_update(_fake_request("/admin/apply"))
     assert exc.value.status_code == 401
 
+    with pytest.raises(HTTPException) as exc:
+        dashboard(_fake_request("/dashboard", session={"user": {"role": "UNKNOWN"}}))
+    assert exc.value.status_code == 403
+
 
 # ---------------------------------------------------------------------------
 # PostgreSQL integration tests (require TEST_DATABASE_URL)
@@ -157,9 +161,21 @@ def test_end_to_end_dfd_workflow_and_post_migration_guard():
         assert conn.execute("SELECT status FROM voter WHERE epic = %s", (epic,)).fetchone()[0] == "MIGRATED"
         assert conn.execute("SELECT house_no FROM voter WHERE epic = %s", (epic,)).fetchone()[0] == "New-99"
 
-        # Post-migration immutability trigger blocks editing core voter details
+        # Re-calling fn_validate_form on an already-VALID form stays immutable
+        assert conn.execute("SELECT fn_validate_form(%s)", (form_id,)).fetchone()[0] == "VALID"
+
+        # Already-migrated voter cannot record a second migration
         with pytest.raises(psycopg.Error):
-            conn.execute("UPDATE voter SET name = 'Tampered' WHERE epic = %s", (epic,))
+            with conn.transaction():
+                conn.execute("SELECT fn_record_migration(%s, 'New-99', 'Another-100')", (epic,))
+
+        # Post-migration immutability trigger blocks editing core voter details and status
+        with pytest.raises(psycopg.Error):
+            with conn.transaction():
+                conn.execute("UPDATE voter SET name = 'Tampered' WHERE epic = %s", (epic,))
+        with pytest.raises(psycopg.Error):
+            with conn.transaction():
+                conn.execute("UPDATE voter SET status = 'REJECTED' WHERE epic = %s", (epic,))
 
         conn.rollback()
 
@@ -196,20 +212,53 @@ def test_transaction_rollback_without_approved_sir_config():
 @dbtest
 def test_database_role_permissions():
     with psycopg.connect(DSN) as conn:
+        # Prepare fixture data as owner before testing role switching
+        conn.execute("INSERT INTO part VALUES (104, 174, 'Role Booth') ON CONFLICT DO NOTHING")
+        conn.execute("INSERT INTO section VALUES (104, 1, 'Role Section') ON CONFLICT DO NOTHING")
+        blo_id = conn.execute(
+            "INSERT INTO blo(username, full_name, part_no) VALUES ('role-blo', 'Role BLO', 104) "
+            "ON CONFLICT (username) DO UPDATE SET active = true RETURNING blo_id"
+        ).fetchone()[0]
+        epic = "ROL0000001"
+        conn.execute(
+            "INSERT INTO voter(epic, part_no, section_no, serial_no, name, relation_type, house_no, age, gender, assigned_blo_id) "
+            "VALUES (%s, 104, 1, 1, 'Role Voter', 'Others', 'R-1', 29, 'F', %s) ON CONFLICT DO NOTHING",
+            (epic, blo_id),
+        )
+
+        # voter_role: allowed to submit, validate, queue verification, and record migration
+        with conn.transaction():
+            conn.execute("SET LOCAL ROLE voter_role")
+            f_id = conn.execute(
+                "SELECT fn_submit_form(%s, %s::jsonb)",
+                (epic, '{"name":"Role Voter Updated","age":30,"house_no":"R-2"}'),
+            ).fetchone()[0]
+            assert conn.execute("SELECT fn_validate_form(%s)", (f_id,)).fetchone()[0] == "VALID"
+            req_id = conn.execute("SELECT fn_send_verification_request(%s)", (f_id,)).fetchone()[0]
+            mig_id = conn.execute("SELECT fn_record_migration(%s, 'R-2', 'R-3')", (epic,)).fetchone()[0]
+            assert req_id > 0 and mig_id > 0
+            conn.execute("RESET ROLE")
+
+        # blo_role: allowed to record verification (updates voter + inserts audit_log + checks migration_record)
+        with conn.transaction():
+            conn.execute("SET LOCAL ROLE blo_role")
+            conn.execute("SELECT fn_record_verification(%s, true, 'Verified by role-blo')", (req_id,))
+            conn.execute("RESET ROLE")
+
         # voter_role must not be allowed to delete voters or apply roll updates
-        with conn.transaction():
-            conn.execute("SET LOCAL ROLE voter_role")
-            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with conn.transaction():
+                conn.execute("SET LOCAL ROLE voter_role")
                 conn.execute("DELETE FROM voter")
-        with conn.transaction():
-            conn.execute("SET LOCAL ROLE voter_role")
-            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with conn.transaction():
+                conn.execute("SET LOCAL ROLE voter_role")
                 conn.execute("SELECT fn_apply_roll_update()")
 
         # blo_role must not be allowed to apply roll updates
-        with conn.transaction():
-            conn.execute("SET LOCAL ROLE blo_role")
-            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            with conn.transaction():
+                conn.execute("SET LOCAL ROLE blo_role")
                 conn.execute("SELECT fn_apply_roll_update()")
 
         conn.rollback()

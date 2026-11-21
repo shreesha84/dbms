@@ -2,7 +2,7 @@
 
 Replaces personally identifying fields (name, relation_name, house_no, epic)
 while preserving row count, serial numbers, sections, ages, gender distribution,
-and unique EPIC format.
+and unique EPIC format. Generated names match the voter's gender and relation type.
 """
 from __future__ import annotations
 
@@ -11,6 +11,24 @@ import csv
 from pathlib import Path
 
 from faker import Faker
+
+
+def _name_for_gender(fake: Faker, gender: str) -> str:
+    g = (gender or "").strip().upper()
+    if g == "M":
+        return fake.name_male()
+    if g == "F":
+        return fake.name_female()
+    return fake.name()
+
+
+def _name_for_relation(fake: Faker, relation_type: str) -> str:
+    rel = (relation_type or "").strip().lower()
+    if rel in ("fathers", "husbands"):
+        return fake.name_male()
+    if rel == "mothers":
+        return fake.name_female()
+    return fake.name()
 
 
 def anonymize(source: Path, dest: Path, seed: int = 42) -> int:
@@ -25,8 +43,8 @@ def anonymize(source: Path, dest: Path, seed: int = 42) -> int:
 
     fieldnames = list(rows[0].keys())
     for row in rows:
-        row["name"] = fake.name()
-        row["relation_name"] = fake.name()
+        row["name"] = _name_for_gender(fake, row.get("gender", ""))
+        row["relation_name"] = _name_for_relation(fake, row.get("relation_type", ""))
         row["house_no"] = str(fake.building_number())
         row["epic"] = f"DEM{int(row['serial_no']):07d}"
 

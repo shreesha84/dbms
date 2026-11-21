@@ -65,6 +65,45 @@ def _pg_message(exc: psycopg.Error) -> str:
     return str(exc).splitlines()[0]
 
 
+@app.exception_handler(psycopg.OperationalError)
+def db_connection_error(request: Request, exc: psycopg.OperationalError):
+    return templates.TemplateResponse(
+        request,
+        "message.html",
+        {
+            "title": "Database Connection Error",
+            "category": "danger",
+            "message": (
+                f"Could not connect to PostgreSQL ({_pg_message(exc)}). "
+                "Ensure the PostgreSQL service is running, DATABASE_URL is set correctly, "
+                "and db/schema.sql has been applied."
+            ),
+            "back_url": "/",
+            "back_label": "Back to sign in",
+        },
+        status_code=503,
+    )
+
+
+@app.exception_handler(psycopg.Error)
+def db_query_error(request: Request, exc: psycopg.Error):
+    return templates.TemplateResponse(
+        request,
+        "message.html",
+        {
+            "title": "Database Error",
+            "category": "danger",
+            "message": (
+                f"Database error: {_pg_message(exc)}. "
+                "Verify that db/schema.sql, etl/load_roll.py, and seed.py have been run."
+            ),
+            "back_url": "/",
+            "back_label": "Back to sign in",
+        },
+        status_code=500,
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse(
